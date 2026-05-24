@@ -824,7 +824,7 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 
 <script>
 // ── CONFIG ──
-const WS_URL = 'ws://192.168.2.143:8080';
+const WS_URL = 'ws://ayugram-server-production.up.railway.app';
 
 // ── STATE ──
 let myName = localStorage.getItem('ag_user') || '';
@@ -1212,8 +1212,25 @@ function triggerFile() { document.getElementById('fileInput').click(); hideAttac
 
 document.getElementById('mediaInput').onchange = function(e) {
     const f = e.target.files[0]; if (!f || !activeChat) return;
+    if (f.size > 20 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 20 МБ'); return; }
+    const r = new FileReader();
+    r.onload = ev => {
+        const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim(), media: ev.target.result, mediaType: f.type };
+        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
+        ws.send(JSON.stringify(payload));
+        document.getElementById('chatInput').value = '';
+        clearReply();
+    };
+    r.readAsDataURL(f);
+    e.target.value = '';
+};
+
+document.getElementById('fileInput').onchange = function(e) {
+    const f = e.target.files[0]; if (!f || !activeChat) return;
     if (f.size > 50 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 50 МБ'); return; }
-    sendFileNow(f);
+    const r = new FileReader();
+    r.onload = ev => ws.send(JSON.stringify({ type: 'message', to: activeChat, text: `📁 ${f.name}`, media: ev.target.result, mediaType: f.type, fileName: f.name }));
+    r.readAsDataURL(f);
     e.target.value = '';
 };
 
@@ -1310,28 +1327,10 @@ function renderMsgs() {
                 <span class="voice-dur">0:00</span>
             </div>`;
         } else if (m.media) {
-            if (m.mediaType?.startsWith('image/')) {
-                mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')" style="cursor:zoom-in">`;
-            } else if (m.mediaType?.startsWith('video/')) {
-                mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media" style="max-width:100%;border-radius:10px;margin-bottom:6px"></video>`;
-            } else if (m.mediaType?.startsWith('audio/')) {
-                mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px;border-radius:8px"></audio>`;
-            } else {
-                // Любой другой файл — кнопка скачать
-                const fname = m.fileName || 'Файл';
-                const fsize = m.fileSize ? ` · ${m.fileSize}` : '';
-                const ext = fname.split('.').pop().toUpperCase();
-                const extColors = { PDF:'#e05252', ZIP:'#f0932b', RAR:'#f0932b', DOC:'#2f8ccf', DOCX:'#2f8ccf', XLS:'#3dbc78', XLSX:'#3dbc78', PPT:'#e67e22', PPTX:'#e67e22', MP3:'#9c59d1', WAV:'#9c59d1', TXT:'#708599' };
-                const extColor = extColors[ext] || '#708599';
-                mediaHtml = `<div onclick="downloadFile('${m.media}','${fname.replace(/'/g,"\\'")}',this)" style="display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.15);padding:10px 12px;border-radius:10px;margin-bottom:4px;cursor:pointer;min-width:200px;transition:.15s" onmouseover="this.style.background='rgba(0,0,0,.25)'" onmouseout="this.style.background='rgba(0,0,0,.15)'">
-                    <div style="width:42px;height:42px;border-radius:10px;background:${extColor};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0">${ext||'?'}</div>
-                    <div style="flex:1;min-width:0">
-                        <div style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fname}</div>
-                        <div style="font-size:11px;color:var(--sub)">Нажмите чтобы скачать${fsize}</div>
-                    </div>
-                    <div style="font-size:18px;opacity:.6">⬇️</div>
-                </div>`;
-            }
+            if (m.mediaType?.startsWith('image/')) mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')">`;
+            else if (m.mediaType?.startsWith('video/')) mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media"></video>`;
+            else if (m.mediaType?.startsWith('audio/')) mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px"></audio>`;
+            else mediaHtml = `<div style="background:rgba(0,0,0,.15);padding:8px;border-radius:8px;margin-bottom:4px;font-size:13px">📁 ${m.fileName || 'Файл'}</div>`;
         }
 
         let replyHtml = '';
@@ -1482,21 +1481,6 @@ function openViewer(type, src) {
     v.classList.add('show');
 }
 function closeViewer() { document.getElementById('mediaViewer').classList.remove('show'); document.getElementById('viewerContent').innerHTML = ''; }
-
-function downloadFile(dataUrl, fileName, el) {
-    try {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        showToast(`⬇️ Скачиваем ${fileName}`);
-    } catch(e) {
-        showToast('❌ Не удалось скачать файл');
-    }
-}
 
 // ── УВЕДОМЛЕНИЯ (улучшенные) ──
 function requestNotifPerm() {
@@ -2117,106 +2101,73 @@ window.sendMsg = function() {
     _origSendMsg();
 };
 
-// ── ALL FILE TYPES (единый обработчик) ──
-
-// Универсальная функция отправки файла
-function sendFileNow(f) {
-    if (!activeChat) return showToast('Выберите чат');
-    if (f.size > 100 * 1024 * 1024) return showToast(`❌ Слишком большой: ${f.name} (макс. 100 МБ)`);
-
-    const reader = new FileReader();
-    showToast(`📤 Загружаем ${f.name}...`);
-
-    reader.onload = ev => {
-        const payload = {
-            type: 'message',
-            to: activeChat,
-            text: '',
-            media: ev.target.result,
-            mediaType: f.type || 'application/octet-stream',
-            fileName: f.name
-        };
-        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
-        ws.send(JSON.stringify(payload));
-        clearReply();
-        cancelFilePrev();
-    };
-
-    reader.onerror = () => showToast(`❌ Ошибка чтения файла`);
-    reader.readAsDataURL(f);
-}
-
-// fileInput — любые файлы, можно несколько
-document.getElementById('fileInput').onchange = function(e) {
-    const files = Array.from(e.target.files);
-    if (!files.length || !activeChat) return;
-    if (files.length === 1) {
-        showFilePreview(files[0]);
-    } else {
-        // Несколько файлов — отправляем все сразу
-        files.forEach(f => sendFileNow(f));
-    }
-    e.target.value = '';
-};
-
-// Аудио input
+// ── ALL FILE TYPES ──
+let pendingFileData = null;
 const audioInput = document.createElement('input');
-audioInput.type = 'file';
-audioInput.accept = 'audio/*';
-audioInput.style.display = 'none';
+audioInput.type = 'file'; audioInput.accept = 'audio/*'; audioInput.style.display = 'none';
 document.body.appendChild(audioInput);
 function triggerAudio() { audioInput.click(); hideAttachMenu(); }
 audioInput.onchange = function(e) {
-    const f = e.target.files[0]; if (!f) return;
-    showFilePreview(f);
+    const f = e.target.files[0]; if (!f || !activeChat) return;
+    readAndSendFile(f);
     e.target.value = '';
 };
 
-// Превью файла перед отправкой
-let pendingFileData = null;
+// Override fileInput to handle multiple files
+document.getElementById('fileInput').onchange = function(e) {
+    const files = Array.from(e.target.files); if (!files.length || !activeChat) return;
+    files.forEach(f => readAndSendFile(f));
+    e.target.value = '';
+};
+
+function readAndSendFile(f) {
+    if (f.size > 100 * 1024 * 1024) { showToast(`❌ Файл слишком большой: ${f.name}`); return; }
+    showFilePreview(f);
+    pendingFileData = f;
+}
 
 function showFilePreview(f) {
-    pendingFileData = f;
     const bar = document.getElementById('filePreviewBar');
-    // Иконка по типу
-    const typeMap = [
-        ['image/', '🖼️'], ['video/', '🎬'], ['audio/', '🎵'],
-        ['application/pdf', '📄'], ['application/zip', '🗜️'],
-        ['application/x-zip', '🗜️'], ['application/x-rar', '🗜️'],
-        ['text/', '📝'], ['application/msword', '📝'],
-        ['application/vnd.openxmlformats', '📊'],
-        ['application/vnd.ms-excel', '📊'],
-        ['application/vnd.ms-powerpoint', '📊'],
-    ];
+    const icons = { 'image/': '🖼️', 'video/': '🎬', 'audio/': '🎵', 'application/pdf': '📄', 'application/zip': '🗜️', 'application/x-zip': '🗜️', 'text/': '📝', 'application/msword': '📝', 'application/vnd': '📊' };
     let ico = '📁';
-    for (const [k, v] of typeMap) {
-        if (f.type.startsWith(k) || f.type === k) { ico = v; break; }
-    }
+    for (const [k,v] of Object.entries(icons)) { if (f.type.startsWith(k)||f.type===k) { ico = v; break; } }
     document.getElementById('filePrevIco').textContent = ico;
     document.getElementById('filePrevName').textContent = f.name;
     document.getElementById('filePrevSize').textContent = formatBytes(f.size);
     bar.classList.add('show');
-    // Вставить перед footer если ещё не там
+    // Insert bar before footer
     const footer = document.querySelector('.chat-footer');
-    if (bar.parentNode !== footer.parentNode) footer.parentNode.insertBefore(bar, footer);
+    footer.parentNode.insertBefore(bar, footer);
+    // Auto-send after click send
+    const origSend = window._fileAutoSend;
+    window._fileAutoSend = f;
 }
 
 function cancelFilePrev() {
     document.getElementById('filePreviewBar').classList.remove('show');
-    pendingFileData = null;
+    pendingFileData = null; window._fileAutoSend = null;
 }
 
 function formatBytes(b) {
     if (b < 1024) return b + ' Б';
-    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' КБ';
-    return (b / (1024 * 1024)).toFixed(1) + ' МБ';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' КБ';
+    return (b/(1024*1024)).toFixed(1) + ' МБ';
 }
 
-// Перехват sendMsg: если есть pendingFile — отправить его
+// Intercept send to check for pending file
 const __sendMsg = window.sendMsg;
 window.sendMsg = function() {
-    if (pendingFileData) {
-        sendFileNow(pendingFileData);
+    if (pendingFileData && activeChat) {
+        const f = pendingFileData; pendingFileData = null;
+        cancelFilePrev();
+        const r = new FileReader();
+        r.onload = ev => {
+            const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim()||'', media: ev.target.result, mediaType: f.type, fileName: f.name };
+            if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text||'📎'; }
+            ws.send(JSON.stringify(payload));
+            document.getElementById('chatInput').value = ''; clearReply();
+        };
+        r.readAsDataURL(f);
         return;
     }
     __sendMsg();
