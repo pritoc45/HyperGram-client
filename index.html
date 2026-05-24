@@ -411,8 +411,9 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 <body data-theme="dark">
 
 <input type="file" id="mediaInput" accept="image/*,video/*">
-<input type="file" id="fileInput" accept="*/*" multiple>
+<input type="file" id="fileInput" multiple>
 <input type="file" id="avatarInput" accept="image/*">
+<input type="file" id="cameraInput" accept="image/*,video/*" capture="environment">
 
 <!-- MEDIA VIEWER -->
 <div id="mediaViewer" onclick="if(event.target===this)closeViewer()">
@@ -674,6 +675,9 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 
 <!-- ATTACH MENU -->
 <div class="attach-menu" id="attachMenu" style="width:220px">
+    <div class="attach-opt" onclick="triggerCamera()">
+        <div class="attach-opt-ico" style="background:#e84393">📷</div> Камера
+    </div>
     <div class="attach-opt" onclick="triggerMedia()">
         <div class="attach-opt-ico" style="background:#5288c1">🖼️</div> Фото / Видео
     </div>
@@ -681,10 +685,10 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
         <div class="attach-opt-ico" style="background:#3dbc78">📁</div> Любой файл
     </div>
     <div class="attach-opt" onclick="triggerAudio()">
-        <div class="attach-opt-ico" style="background:#9c59d1">🎵</div> Музыка / Аудио
+        <div class="attach-opt-ico" style="background:#9c59d1">🎵</div> Аудио
     </div>
     <div class="attach-opt" onclick="startVoiceRecord()">
-        <div class="attach-opt-ico" style="background:#e84393">🎤</div> Голосовое
+        <div class="attach-opt-ico" style="background:#f0932b">🎤</div> Голосовое
     </div>
     <div class="attach-opt" onclick="shareLocation()">
         <div class="attach-opt-ico" style="background:#e05252">📍</div> Геолокация
@@ -1328,30 +1332,94 @@ function sendMsg() {
 // ── MEDIA ──
 function triggerMedia() { document.getElementById('mediaInput').click(); hideAttachMenu(); }
 function triggerFile() { document.getElementById('fileInput').click(); hideAttachMenu(); }
+function triggerCamera() {
+    const inp = document.getElementById('cameraInput');
+    inp.click();
+    hideAttachMenu();
+}
+document.getElementById('cameraInput').onchange = function(e) {
+    const files = Array.from(e.target.files);
+    if (!files.length || !activeChat) return;
+    files.forEach(f => sendFileNow(f));
+    e.target.value = '';
+};
 
-document.getElementById('mediaInput').onchange = function(e) {
-    const f = e.target.files[0]; if (!f || !activeChat) return;
-    if (f.size > 20 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 20 МБ'); return; }
-    const r = new FileReader();
-    r.onload = ev => {
-        const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim(), media: ev.target.result, mediaType: f.type };
+// ── ЕДИНЫЙ ОБРАБОТЧИК ФАЙЛОВ ──
+let pendingFileData = null;
+
+function sendFileNow(f) {
+    if (!activeChat) return showToast('Выберите чат');
+    if (f.size > 100 * 1024 * 1024) return showToast(`❌ Слишком большой: ${f.name} (макс. 100 МБ)`);
+    showToast(`📤 Отправляем ${f.name}...`);
+    const reader = new FileReader();
+    reader.onload = ev => {
+        const payload = {
+            type: 'message', to: activeChat,
+            text: '',
+            media: ev.target.result,
+            mediaType: f.type || 'application/octet-stream',
+            fileName: f.name
+        };
         if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
         ws.send(JSON.stringify(payload));
-        document.getElementById('chatInput').value = '';
         clearReply();
+        cancelFilePrev();
     };
-    r.readAsDataURL(f);
+    reader.onerror = () => showToast('❌ Ошибка чтения файла');
+    reader.readAsDataURL(f);
+}
+
+// Фото/Видео
+document.getElementById('mediaInput').onchange = function(e) {
+    const files = Array.from(e.target.files);
+    if (!files.length || !activeChat) return;
+    files.forEach(f => sendFileNow(f));
     e.target.value = '';
 };
 
+// Любой файл
 document.getElementById('fileInput').onchange = function(e) {
-    const f = e.target.files[0]; if (!f || !activeChat) return;
-    if (f.size > 50 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 50 МБ'); return; }
-    const r = new FileReader();
-    r.onload = ev => ws.send(JSON.stringify({ type: 'message', to: activeChat, text: `📁 ${f.name}`, media: ev.target.result, mediaType: f.type, fileName: f.name }));
-    r.readAsDataURL(f);
+    const files = Array.from(e.target.files);
+    if (!files.length || !activeChat) return;
+    if (files.length === 1) {
+        showFilePreview(files[0]);
+    } else {
+        files.forEach(f => sendFileNow(f));
+    }
     e.target.value = '';
 };
+
+function showFilePreview(f) {
+    pendingFileData = f;
+    const typeMap = [
+        ['image/','🖼️'],['video/','🎬'],['audio/','🎵'],
+        ['application/pdf','📄'],['application/zip','🗜️'],
+        ['application/x-zip','🗜️'],['application/x-rar','🗜️'],
+        ['application/x-7z','🗜️'],['text/','📝'],
+        ['application/msword','📝'],['application/vnd.openxmlformats','📊'],
+        ['application/vnd.ms-','📊'],
+    ];
+    let ico = '📁';
+    for (const [k,v] of typeMap) { if (f.type.startsWith(k)||f.type===k) { ico=v; break; } }
+    document.getElementById('filePrevIco').textContent = ico;
+    document.getElementById('filePrevName').textContent = f.name;
+    document.getElementById('filePrevSize').textContent = formatBytes(f.size);
+    const bar = document.getElementById('filePreviewBar');
+    bar.classList.add('show');
+    const footer = document.querySelector('.chat-footer');
+    if (bar.parentNode !== footer.parentNode) footer.parentNode.insertBefore(bar, footer);
+}
+
+function cancelFilePrev() {
+    document.getElementById('filePreviewBar').classList.remove('show');
+    pendingFileData = null;
+}
+
+function formatBytes(b) {
+    if (b < 1024) return b + ' Б';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' КБ';
+    return (b/(1024*1024)).toFixed(1) + ' МБ';
+}
 
 // ── VOICE RECORDING ──
 async function startVoiceRecord() {
@@ -2245,75 +2313,23 @@ window.sendMsg = function() {
     _origSendMsg();
 };
 
-// ── ALL FILE TYPES ──
-let pendingFileData = null;
+// ── АУДИО INPUT ──
 const audioInput = document.createElement('input');
-audioInput.type = 'file'; audioInput.accept = 'audio/*'; audioInput.style.display = 'none';
+audioInput.type = 'file';
+audioInput.accept = 'audio/*';
+audioInput.style.display = 'none';
 document.body.appendChild(audioInput);
 function triggerAudio() { audioInput.click(); hideAttachMenu(); }
 audioInput.onchange = function(e) {
-    const f = e.target.files[0]; if (!f || !activeChat) return;
-    readAndSendFile(f);
-    e.target.value = '';
-};
-
-// Override fileInput to handle multiple files
-document.getElementById('fileInput').onchange = function(e) {
-    const files = Array.from(e.target.files); if (!files.length || !activeChat) return;
-    files.forEach(f => readAndSendFile(f));
-    e.target.value = '';
-};
-
-function readAndSendFile(f) {
-    if (f.size > 100 * 1024 * 1024) { showToast(`❌ Файл слишком большой: ${f.name}`); return; }
+    const f = e.target.files[0]; if (!f) return;
     showFilePreview(f);
-    pendingFileData = f;
-}
+    e.target.value = '';
+};
 
-function showFilePreview(f) {
-    const bar = document.getElementById('filePreviewBar');
-    const icons = { 'image/': '🖼️', 'video/': '🎬', 'audio/': '🎵', 'application/pdf': '📄', 'application/zip': '🗜️', 'application/x-zip': '🗜️', 'text/': '📝', 'application/msword': '📝', 'application/vnd': '📊' };
-    let ico = '📁';
-    for (const [k,v] of Object.entries(icons)) { if (f.type.startsWith(k)||f.type===k) { ico = v; break; } }
-    document.getElementById('filePrevIco').textContent = ico;
-    document.getElementById('filePrevName').textContent = f.name;
-    document.getElementById('filePrevSize').textContent = formatBytes(f.size);
-    bar.classList.add('show');
-    // Insert bar before footer
-    const footer = document.querySelector('.chat-footer');
-    footer.parentNode.insertBefore(bar, footer);
-    // Auto-send after click send
-    const origSend = window._fileAutoSend;
-    window._fileAutoSend = f;
-}
-
-function cancelFilePrev() {
-    document.getElementById('filePreviewBar').classList.remove('show');
-    pendingFileData = null; window._fileAutoSend = null;
-}
-
-function formatBytes(b) {
-    if (b < 1024) return b + ' Б';
-    if (b < 1024*1024) return (b/1024).toFixed(1) + ' КБ';
-    return (b/(1024*1024)).toFixed(1) + ' МБ';
-}
-
-// Intercept send to check for pending file
+// Перехват sendMsg для отправки файла из превью
 const __sendMsg = window.sendMsg;
 window.sendMsg = function() {
-    if (pendingFileData && activeChat) {
-        const f = pendingFileData; pendingFileData = null;
-        cancelFilePrev();
-        const r = new FileReader();
-        r.onload = ev => {
-            const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim()||'', media: ev.target.result, mediaType: f.type, fileName: f.name };
-            if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text||'📎'; }
-            ws.send(JSON.stringify(payload));
-            document.getElementById('chatInput').value = ''; clearReply();
-        };
-        r.readAsDataURL(f);
-        return;
-    }
+    if (pendingFileData) { sendFileNow(pendingFileData); return; }
     __sendMsg();
 };
 
