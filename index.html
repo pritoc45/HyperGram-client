@@ -748,24 +748,24 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
     </div>
 
     <!-- SIDE TABS -->
-    <div class="side-tabs">
-        <div class="tab-btn" onclick="openSidebar()" title="Меню">
-            <svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
-        </div>
-        <div class="tab-btn active" id="tab_chats" onclick="setTab('chats')" title="Чаты">
-            <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-            Чаты
-        </div>
-        <div class="tab-btn" id="tab_saved" onclick="selectChat('Избранное')" title="Избранное">
-            <svg viewBox="0 0 24 24"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
-            Сохранено
-        </div>
-        <div style="margin-top:auto;margin-bottom:16px">
-            <div class="tab-btn" onclick="toggleTheme()" id="themeTabBtn" title="Сменить тему">
-                <span id="themeIco" style="font-size:22px">🌙</span>
+<div class="side-tabs">
+            <div class="tab-item" onclick="openSidebar()" style="color: var(--sub);">
+                <svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
             </div>
+            <div class="tab-item active">
+                <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+                <span>All</span>
+            </div>
+            <div class="tab-item" onclick="alert('Фильтр: Личные')">
+                <span style="font-size: 20px; margin-bottom: 2px;">👤</span>
+                <span>Личные</span>
+            </div>
+            <div class="tab-item" onclick="alert('Фильтр: Группы')">
+                <span style="font-size: 20px; margin-bottom: 2px;">👥</span>
+                <span>Группы</span>
+            </div>
+            <div class="tab-item pc-theme-btn" onclick="toggleTheme()" id="pcThemeIcon" title="Сменить тему">🌙</div>
         </div>
-    </div>
 
     <!-- LEFT: CHAT LIST -->
     <div class="left-area">
