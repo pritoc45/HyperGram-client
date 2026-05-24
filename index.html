@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>AyuGram Pro</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2f8ccf">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AyuGram">
 <style>
 :root {
     --bg: #0e1621; --panel: rgba(23,33,43,0.92); --sidebar: rgba(19,28,38,0.95);
@@ -819,7 +824,7 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 
 <script>
 // ── CONFIG ──
-const WS_URL = 'wss://ayugram-server-production.up.railway.app';
+const WS_URL = 'ws://192.168.2.143:8080';
 
 // ── STATE ──
 let myName = localStorage.getItem('ag_user') || '';
@@ -1207,25 +1212,8 @@ function triggerFile() { document.getElementById('fileInput').click(); hideAttac
 
 document.getElementById('mediaInput').onchange = function(e) {
     const f = e.target.files[0]; if (!f || !activeChat) return;
-    if (f.size > 20 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 20 МБ'); return; }
-    const r = new FileReader();
-    r.onload = ev => {
-        const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim(), media: ev.target.result, mediaType: f.type };
-        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
-        ws.send(JSON.stringify(payload));
-        document.getElementById('chatInput').value = '';
-        clearReply();
-    };
-    r.readAsDataURL(f);
-    e.target.value = '';
-};
-
-document.getElementById('fileInput').onchange = function(e) {
-    const f = e.target.files[0]; if (!f || !activeChat) return;
     if (f.size > 50 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 50 МБ'); return; }
-    const r = new FileReader();
-    r.onload = ev => ws.send(JSON.stringify({ type: 'message', to: activeChat, text: `📁 ${f.name}`, media: ev.target.result, mediaType: f.type, fileName: f.name }));
-    r.readAsDataURL(f);
+    sendFileNow(f);
     e.target.value = '';
 };
 
@@ -1322,10 +1310,28 @@ function renderMsgs() {
                 <span class="voice-dur">0:00</span>
             </div>`;
         } else if (m.media) {
-            if (m.mediaType?.startsWith('image/')) mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')">`;
-            else if (m.mediaType?.startsWith('video/')) mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media"></video>`;
-            else if (m.mediaType?.startsWith('audio/')) mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px"></audio>`;
-            else mediaHtml = `<div style="background:rgba(0,0,0,.15);padding:8px;border-radius:8px;margin-bottom:4px;font-size:13px">📁 ${m.fileName || 'Файл'}</div>`;
+            if (m.mediaType?.startsWith('image/')) {
+                mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')" style="cursor:zoom-in">`;
+            } else if (m.mediaType?.startsWith('video/')) {
+                mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media" style="max-width:100%;border-radius:10px;margin-bottom:6px"></video>`;
+            } else if (m.mediaType?.startsWith('audio/')) {
+                mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px;border-radius:8px"></audio>`;
+            } else {
+                // Любой другой файл — кнопка скачать
+                const fname = m.fileName || 'Файл';
+                const fsize = m.fileSize ? ` · ${m.fileSize}` : '';
+                const ext = fname.split('.').pop().toUpperCase();
+                const extColors = { PDF:'#e05252', ZIP:'#f0932b', RAR:'#f0932b', DOC:'#2f8ccf', DOCX:'#2f8ccf', XLS:'#3dbc78', XLSX:'#3dbc78', PPT:'#e67e22', PPTX:'#e67e22', MP3:'#9c59d1', WAV:'#9c59d1', TXT:'#708599' };
+                const extColor = extColors[ext] || '#708599';
+                mediaHtml = `<div onclick="downloadFile('${m.media}','${fname.replace(/'/g,"\\'")}',this)" style="display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.15);padding:10px 12px;border-radius:10px;margin-bottom:4px;cursor:pointer;min-width:200px;transition:.15s" onmouseover="this.style.background='rgba(0,0,0,.25)'" onmouseout="this.style.background='rgba(0,0,0,.15)'">
+                    <div style="width:42px;height:42px;border-radius:10px;background:${extColor};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0">${ext||'?'}</div>
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fname}</div>
+                        <div style="font-size:11px;color:var(--sub)">Нажмите чтобы скачать${fsize}</div>
+                    </div>
+                    <div style="font-size:18px;opacity:.6">⬇️</div>
+                </div>`;
+            }
         }
 
         let replyHtml = '';
@@ -1477,13 +1483,87 @@ function openViewer(type, src) {
 }
 function closeViewer() { document.getElementById('mediaViewer').classList.remove('show'); document.getElementById('viewerContent').innerHTML = ''; }
 
-// ── NOTIFICATIONS ──
-function requestNotifPerm() { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); }
+function downloadFile(dataUrl, fileName, el) {
+    try {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showToast(`⬇️ Скачиваем ${fileName}`);
+    } catch(e) {
+        showToast('❌ Не удалось скачать файл');
+    }
+}
+
+// ── УВЕДОМЛЕНИЯ (улучшенные) ──
+function requestNotifPerm() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+        Notification.requestPermission().then(p => {
+            if (p === 'granted') showToast('🔔 Уведомления включены!');
+        });
+    }
+    // Регистрируем Service Worker для фоновых уведомлений
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+}
+
 function fireNotif(d) {
     if (settState.notif === false) return;
-    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification(`AyuGram: ${d.from}`, { body: d.text || '📎 Медиафайл', icon: '/favicon.ico' });
+    if (Notification.permission !== 'granted') return;
+
+    const sender = onlineUsers.find(x => x.username === d.from);
+    const name = sender?.displayName || d.from;
+    const body = d.voice ? '🎤 Голосовое сообщение'
+                : d.media ? '📎 Медиафайл'
+                : (d.text || 'Новое сообщение');
+    const icon = sender?.avatar || 'https://img.icons8.com/color/96/telegram-app.png';
+
+    // Если страница открыта и чат активен — не показываем
+    if (!document.hidden && activeChat === d.from) return;
+
+    // Через Service Worker (работает на телефоне в фоне)
+    if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: 'SHOW_NOTIFICATION',
+            title: `AyuGram: ${name}`,
+            body, icon, tag: d.from,
+            data: { from: d.from }
+        });
+    } else {
+        // Fallback — обычное уведомление
+        try {
+            const n = new Notification(`AyuGram: ${name}`, {
+                body, icon, tag: d.from,
+                badge: icon,
+                vibrate: [200, 100, 200],
+                requireInteraction: false
+            });
+            n.onclick = () => { window.focus(); selectChat(d.from); n.close(); };
+        } catch(e) {}
     }
+
+    // Звук уведомления
+    if (settState.sound !== false) playNotifSound();
+}
+
+function playNotifSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+        osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
+    } catch(e) {}
 }
 
 // ── TOAST ──
@@ -1493,98 +1573,247 @@ function showToast(msg) {
     setTimeout(() => t.classList.remove('show'), 2500);
 }
 
-// ── CALLS ──
-let localStream, peerConn, callUser = '', isMuted = false, isVideo = false, callTimerInterval;
-const rtcCfg = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+// ── CALLS (полностью переписано) ──
+let localStream = null, peerConn = null, callUser = '', isMuted = false, isVideo = false, callTimerInterval = null;
+let pendingCandidates = []; // буфер ICE пока remote description не установлен
+let remoteDescSet = false;
 
-async function initMedia(video = false) {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
+const rtcCfg = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' }
+    ],
+    iceCandidatePoolSize: 10
+};
+
+// Получить медиапоток с несколькими fallback вариантами
+async function getMedia(video) {
+    const variants = video
+        ? [
+            { audio: true, video: { width: 1280, height: 720 } },
+            { audio: true, video: { width: 640, height: 480 } },
+            { audio: true, video: true }
+          ]
+        : [
+            { audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 } },
+            { audio: true }
+          ];
+    for (const c of variants) {
+        try { return await navigator.mediaDevices.getUserMedia(c); } catch(e) { console.warn('getUserMedia fallback:', e.name); }
+    }
+    throw new Error('MediaNotAvailable');
 }
 
-function buildPeer(video = false) {
+function createPeer(video) {
+    if (peerConn) { peerConn.close(); peerConn = null; }
+    pendingCandidates = [];
+    remoteDescSet = false;
     peerConn = new RTCPeerConnection(rtcCfg);
-    peerConn.onicecandidate = e => { if (e.candidate) ws.send(JSON.stringify({ type: 'ice_candidate', to: callUser, candidate: e.candidate })); };
+
+    peerConn.onicecandidate = e => {
+        if (e.candidate) ws.send(JSON.stringify({ type: 'ice_candidate', to: callUser, candidate: e.candidate }));
+    };
+    peerConn.oniceconnectionstatechange = () => {
+        console.log('ICE state:', peerConn.iceConnectionState);
+        if (peerConn.iceConnectionState === 'connected' || peerConn.iceConnectionState === 'completed') {
+            document.getElementById(video ? 'videoCallOverlay' : 'callOverlay').querySelector && startCallTimer();
+        }
+        if (peerConn.iceConnectionState === 'failed') {
+            showToast('⚠️ Соединение прервано, переподключаемся...');
+            peerConn.restartIce?.();
+        }
+    };
+    peerConn.onconnectionstatechange = () => {
+        console.log('Connection state:', peerConn.connectionState);
+        if (peerConn.connectionState === 'disconnected' || peerConn.connectionState === 'failed') {
+            showToast('📵 Звонок прерван');
+            video ? endVideoCall(false) : endCall(false);
+        }
+    };
     if (video) {
-        peerConn.ontrack = e => { document.getElementById('remoteVideo').srcObject = e.streams[0]; };
+        peerConn.ontrack = e => {
+            const vid = document.getElementById('remoteVideo');
+            if (vid && e.streams[0]) vid.srcObject = e.streams[0];
+        };
     } else {
-        peerConn.ontrack = e => { const a = new Audio(); a.srcObject = e.streams[0]; a.play(); };
+        let remoteAudio = document.getElementById('remoteAudio');
+        if (!remoteAudio) {
+            remoteAudio = document.createElement('audio');
+            remoteAudio.id = 'remoteAudio';
+            remoteAudio.autoplay = true;
+            remoteAudio.style.display = 'none';
+            document.body.appendChild(remoteAudio);
+        }
+        peerConn.ontrack = e => {
+            if (e.streams[0]) remoteAudio.srcObject = e.streams[0];
+            remoteAudio.play().catch(() => {});
+        };
     }
-    localStream.getTracks().forEach(t => peerConn.addTrack(t, localStream));
+    if (localStream) localStream.getTracks().forEach(t => peerConn.addTrack(t, localStream));
+    return peerConn;
+}
+
+async function flushCandidates() {
+    remoteDescSet = true;
+    for (const c of pendingCandidates) {
+        try { await peerConn.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {}
+    }
+    pendingCandidates = [];
+}
+
+function showCallUI(video, incoming, from) {
+    const overlay = document.getElementById(video ? 'videoCallOverlay' : 'callOverlay');
+    overlay.style.display = 'flex';
+    if (!video) {
+        const u = onlineUsers.find(x => x.username === (from || callUser));
+        document.getElementById('callAva').innerHTML = u?.avatar
+            ? `<img src="${u.avatar}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+            : (u?.displayName?.[0] || '📞');
+        document.getElementById('callStatus').textContent = incoming ? `📲 Входящий от ${from}` : `📞 Звоним ${callUser}...`;
+        document.getElementById('callTimer').textContent = '';
+        document.getElementById('acceptCallBtn').style.display = incoming ? 'flex' : 'none';
+    }
 }
 
 async function startAudioCall() {
     if (!activeChat || activeChat === 'Избранное') return showToast('Выберите собеседника');
+    if (!navigator.mediaDevices?.getUserMedia) return openModal('callPermModal');
     callUser = activeChat; isVideo = false;
-    document.getElementById('callOverlay').style.display = 'flex';
-    document.getElementById('callStatus').textContent = `Звоним ${callUser}...`;
-    document.getElementById('callTimer').textContent = '';
-    document.getElementById('acceptCallBtn').style.display = 'none';
-    const u = onlineUsers.find(x => x.username === callUser);
-    document.getElementById('callAva').innerHTML = u?.avatar ? `<img src="${u.avatar}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">` : '📞';
+    showCallUI(false, false, null);
     try {
-        await initMedia(false); buildPeer(false);
-        const offer = await peerConn.createOffer(); await peerConn.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'call_offer', to: callUser, offer }));
-    } catch (e) { showToast('Нет доступа к микрофону'); endCall(false); }
+        localStream = await getMedia(false);
+        createPeer(false);
+        const offer = await peerConn.createOffer({ offerToReceiveAudio: true });
+        await peerConn.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: 'call_offer', to: callUser, offer: peerConn.localDescription }));
+    } catch(e) {
+        console.error('startAudioCall error:', e);
+        endCall(false);
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message === 'MediaNotAvailable') openModal('callPermModal');
+        else showToast('❌ Ошибка: ' + e.message);
+    }
 }
 
 async function startVideoCall() {
     if (!activeChat || activeChat === 'Избранное') return showToast('Выберите собеседника');
+    if (!navigator.mediaDevices?.getUserMedia) return openModal('callPermModal');
     callUser = activeChat; isVideo = true;
-    document.getElementById('videoCallOverlay').style.display = 'flex';
+    showCallUI(true, false, null);
     try {
-        await initMedia(true); buildPeer(true);
+        localStream = await getMedia(true);
+        createPeer(true);
         document.getElementById('localVideo').srcObject = localStream;
-        const offer = await peerConn.createOffer(); await peerConn.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'video_offer', to: callUser, offer }));
-    } catch (e) { showToast('Нет доступа к камере/микрофону'); endVideoCall(false); }
+        const offer = await peerConn.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+        await peerConn.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: 'video_offer', to: callUser, offer: peerConn.localDescription }));
+    } catch(e) {
+        console.error('startVideoCall error:', e);
+        endVideoCall(false);
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message === 'MediaNotAvailable') openModal('callPermModal');
+        else showToast('❌ Ошибка: ' + e.message);
+    }
 }
 
 async function handleIncomingCall(from, offer, video) {
-    callUser = from; isVideo = video;
-    const overlay = video ? 'videoCallOverlay' : 'callOverlay';
-    document.getElementById(overlay).style.display = 'flex';
-    if (!video) {
-        document.getElementById('callStatus').textContent = `Входящий от ${from}`;
-        document.getElementById('acceptCallBtn').style.display = 'flex';
+    // Если уже идёт звонок — отклонить
+    if (peerConn && peerConn.connectionState !== 'closed') {
+        ws.send(JSON.stringify({ type: 'call_end', to: from }));
+        return;
     }
+    callUser = from; isVideo = video;
+    showCallUI(video, true, from);
+
+    // Звуковой сигнал входящего звонка
     try {
-        await initMedia(video); buildPeer(video);
+        const ctx = new AudioContext();
+        const playRing = () => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.frequency.value = 440; gain.gain.value = 0.3;
+            osc.start(); osc.stop(ctx.currentTime + 0.3);
+        };
+        playRing();
+        setTimeout(playRing, 600);
+    } catch(e) {}
+
+    // Уведомление о входящем звонке
+    if (Notification.permission === 'granted') {
+        const n = new Notification(`📞 Входящий звонок от ${from}`, { body: 'Нажмите чтобы ответить', icon: '/favicon.ico', requireInteraction: true, tag: 'incoming-call' });
+        n.onclick = () => { window.focus(); n.close(); };
+    }
+
+    try {
+        localStream = await getMedia(video);
+        createPeer(video);
         if (video) document.getElementById('localVideo').srcObject = localStream;
         await peerConn.setRemoteDescription(new RTCSessionDescription(offer));
+        await flushCandidates();
+        // Видеозвонок принимается автоматически
         if (video) {
-            const answer = await peerConn.createAnswer(); await peerConn.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer }));
+            const answer = await peerConn.createAnswer();
+            await peerConn.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer: peerConn.localDescription }));
+            startCallTimer();
         }
-    } catch (e) { showToast('Ошибка входящего звонка'); }
+    } catch(e) {
+        console.error('handleIncomingCall error:', e);
+        showToast('❌ Ошибка входящего звонка: ' + e.message);
+        if (e.name === 'NotAllowedError') openModal('callPermModal');
+    }
 }
 
 async function acceptCall() {
     document.getElementById('acceptCallBtn').style.display = 'none';
-    document.getElementById('callStatus').textContent = `Разговор с ${callUser}`;
-    startCallTimer();
-    const answer = await peerConn.createAnswer(); await peerConn.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer }));
+    document.getElementById('callStatus').textContent = `🔊 Разговор с ${callUser}`;
+    try {
+        const answer = await peerConn.createAnswer();
+        await peerConn.setLocalDescription(answer);
+        await flushCandidates();
+        ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer: peerConn.localDescription }));
+        startCallTimer();
+    } catch(e) { showToast('Ошибка при ответе: ' + e.message); }
 }
 
 async function handleAnswer(answer) {
-    document.getElementById('callStatus').textContent = `Разговор с ${callUser}`;
-    startCallTimer();
-    await peerConn.setRemoteDescription(new RTCSessionDescription(answer));
+    if (!peerConn) return;
+    try {
+        await peerConn.setRemoteDescription(new RTCSessionDescription(answer));
+        await flushCandidates();
+        document.getElementById('callStatus').textContent = `🔊 Разговор с ${callUser}`;
+        startCallTimer();
+    } catch(e) { console.error('handleAnswer error:', e); }
 }
-function handleIce(c) { if (peerConn) peerConn.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}); }
+
+function handleIce(candidate) {
+    if (!peerConn) return;
+    if (remoteDescSet) {
+        peerConn.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.warn('ICE add error:', e));
+    } else {
+        pendingCandidates.push(candidate); // буферизуем до установки remote desc
+    }
+}
 
 function endCall(send = true) {
     if (send && callUser) ws.send(JSON.stringify({ type: 'call_end', to: callUser }));
-    peerConn?.close(); localStream?.getTracks().forEach(t => t.stop());
-    peerConn = null; localStream = null; callUser = '';
+    peerConn?.close(); peerConn = null;
+    localStream?.getTracks().forEach(t => t.stop()); localStream = null;
+    callUser = ''; remoteDescSet = false; pendingCandidates = [];
+    clearInterval(callTimerInterval); callTimerInterval = null;
     document.getElementById('callOverlay').style.display = 'none';
-    clearInterval(callTimerInterval);
+    const ra = document.getElementById('remoteAudio'); if (ra) ra.srcObject = null;
 }
+
 function endVideoCall(send = true) {
     if (send && callUser) ws.send(JSON.stringify({ type: 'call_end', to: callUser }));
-    peerConn?.close(); localStream?.getTracks().forEach(t => t.stop());
-    peerConn = null; localStream = null; callUser = '';
+    peerConn?.close(); peerConn = null;
+    localStream?.getTracks().forEach(t => t.stop()); localStream = null;
+    callUser = ''; remoteDescSet = false; pendingCandidates = [];
+    clearInterval(callTimerInterval); callTimerInterval = null;
     document.getElementById('videoCallOverlay').style.display = 'none';
 }
 
@@ -1619,6 +1848,15 @@ if (!isNight) {
     document.getElementById('themeIco').textContent = '☀️';
 }
 renderChatList();
+
+// Слушаем сообщения от Service Worker (клик на уведомление)
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', e => {
+        if (e.data?.type === 'OPEN_CHAT' && e.data.from) {
+            selectChat(e.data.from);
+        }
+    });
+}
 
 // ======================================================
 // ── NEW FEATURES ──
@@ -1879,73 +2117,106 @@ window.sendMsg = function() {
     _origSendMsg();
 };
 
-// ── ALL FILE TYPES ──
-let pendingFileData = null;
+// ── ALL FILE TYPES (единый обработчик) ──
+
+// Универсальная функция отправки файла
+function sendFileNow(f) {
+    if (!activeChat) return showToast('Выберите чат');
+    if (f.size > 100 * 1024 * 1024) return showToast(`❌ Слишком большой: ${f.name} (макс. 100 МБ)`);
+
+    const reader = new FileReader();
+    showToast(`📤 Загружаем ${f.name}...`);
+
+    reader.onload = ev => {
+        const payload = {
+            type: 'message',
+            to: activeChat,
+            text: '',
+            media: ev.target.result,
+            mediaType: f.type || 'application/octet-stream',
+            fileName: f.name
+        };
+        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
+        ws.send(JSON.stringify(payload));
+        clearReply();
+        cancelFilePrev();
+    };
+
+    reader.onerror = () => showToast(`❌ Ошибка чтения файла`);
+    reader.readAsDataURL(f);
+}
+
+// fileInput — любые файлы, можно несколько
+document.getElementById('fileInput').onchange = function(e) {
+    const files = Array.from(e.target.files);
+    if (!files.length || !activeChat) return;
+    if (files.length === 1) {
+        showFilePreview(files[0]);
+    } else {
+        // Несколько файлов — отправляем все сразу
+        files.forEach(f => sendFileNow(f));
+    }
+    e.target.value = '';
+};
+
+// Аудио input
 const audioInput = document.createElement('input');
-audioInput.type = 'file'; audioInput.accept = 'audio/*'; audioInput.style.display = 'none';
+audioInput.type = 'file';
+audioInput.accept = 'audio/*';
+audioInput.style.display = 'none';
 document.body.appendChild(audioInput);
 function triggerAudio() { audioInput.click(); hideAttachMenu(); }
 audioInput.onchange = function(e) {
-    const f = e.target.files[0]; if (!f || !activeChat) return;
-    readAndSendFile(f);
-    e.target.value = '';
-};
-
-// Override fileInput to handle multiple files
-document.getElementById('fileInput').onchange = function(e) {
-    const files = Array.from(e.target.files); if (!files.length || !activeChat) return;
-    files.forEach(f => readAndSendFile(f));
-    e.target.value = '';
-};
-
-function readAndSendFile(f) {
-    if (f.size > 100 * 1024 * 1024) { showToast(`❌ Файл слишком большой: ${f.name}`); return; }
+    const f = e.target.files[0]; if (!f) return;
     showFilePreview(f);
-    pendingFileData = f;
-}
+    e.target.value = '';
+};
+
+// Превью файла перед отправкой
+let pendingFileData = null;
 
 function showFilePreview(f) {
+    pendingFileData = f;
     const bar = document.getElementById('filePreviewBar');
-    const icons = { 'image/': '🖼️', 'video/': '🎬', 'audio/': '🎵', 'application/pdf': '📄', 'application/zip': '🗜️', 'application/x-zip': '🗜️', 'text/': '📝', 'application/msword': '📝', 'application/vnd': '📊' };
+    // Иконка по типу
+    const typeMap = [
+        ['image/', '🖼️'], ['video/', '🎬'], ['audio/', '🎵'],
+        ['application/pdf', '📄'], ['application/zip', '🗜️'],
+        ['application/x-zip', '🗜️'], ['application/x-rar', '🗜️'],
+        ['text/', '📝'], ['application/msword', '📝'],
+        ['application/vnd.openxmlformats', '📊'],
+        ['application/vnd.ms-excel', '📊'],
+        ['application/vnd.ms-powerpoint', '📊'],
+    ];
     let ico = '📁';
-    for (const [k,v] of Object.entries(icons)) { if (f.type.startsWith(k)||f.type===k) { ico = v; break; } }
+    for (const [k, v] of typeMap) {
+        if (f.type.startsWith(k) || f.type === k) { ico = v; break; }
+    }
     document.getElementById('filePrevIco').textContent = ico;
     document.getElementById('filePrevName').textContent = f.name;
     document.getElementById('filePrevSize').textContent = formatBytes(f.size);
     bar.classList.add('show');
-    // Insert bar before footer
+    // Вставить перед footer если ещё не там
     const footer = document.querySelector('.chat-footer');
-    footer.parentNode.insertBefore(bar, footer);
-    // Auto-send after click send
-    const origSend = window._fileAutoSend;
-    window._fileAutoSend = f;
+    if (bar.parentNode !== footer.parentNode) footer.parentNode.insertBefore(bar, footer);
 }
 
 function cancelFilePrev() {
     document.getElementById('filePreviewBar').classList.remove('show');
-    pendingFileData = null; window._fileAutoSend = null;
+    pendingFileData = null;
 }
 
 function formatBytes(b) {
     if (b < 1024) return b + ' Б';
-    if (b < 1024*1024) return (b/1024).toFixed(1) + ' КБ';
-    return (b/(1024*1024)).toFixed(1) + ' МБ';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' КБ';
+    return (b / (1024 * 1024)).toFixed(1) + ' МБ';
 }
 
-// Intercept send to check for pending file
+// Перехват sendMsg: если есть pendingFile — отправить его
 const __sendMsg = window.sendMsg;
 window.sendMsg = function() {
-    if (pendingFileData && activeChat) {
-        const f = pendingFileData; pendingFileData = null;
-        cancelFilePrev();
-        const r = new FileReader();
-        r.onload = ev => {
-            const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim()||'', media: ev.target.result, mediaType: f.type, fileName: f.name };
-            if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text||'📎'; }
-            ws.send(JSON.stringify(payload));
-            document.getElementById('chatInput').value = ''; clearReply();
-        };
-        r.readAsDataURL(f);
+    if (pendingFileData) {
+        sendFileNow(pendingFileData);
         return;
     }
     __sendMsg();
@@ -1962,58 +2233,6 @@ function shareLocation() {
         ws.send(JSON.stringify({ type: 'message', to: activeChat, text }));
     }, () => showToast('❌ Нет доступа к геолокации'));
 }
-
-// ── CALLS FIX — better error handling ──
-async function _tryGetMedia(video) {
-    const constraints = video
-        ? [{ audio:true, video:true }, { audio:true, video:{facingMode:'user'} }, { audio:true, video:{width:640} }]
-        : [{ audio:true }, { audio:{ echoCancellation:true, noiseSuppression:true } }];
-    for (const c of constraints) {
-        try { return await navigator.mediaDevices.getUserMedia(c); } catch(e) {}
-    }
-    throw new Error('no_media');
-}
-
-// Patch startAudioCall with better error handling
-window.startAudioCall = async function() {
-    if (!activeChat || activeChat === 'Избранное') return showToast('Выберите собеседника');
-    if (!navigator.mediaDevices?.getUserMedia) return showToast('Ваш браузер не поддерживает звонки');
-    callUser = activeChat; isVideo = false;
-    document.getElementById('callOverlay').style.display = 'flex';
-    document.getElementById('callStatus').textContent = `Звоним ${callUser}...`;
-    document.getElementById('callTimer').textContent = '';
-    document.getElementById('acceptCallBtn').style.display = 'none';
-    const u = onlineUsers.find(x => x.username === callUser);
-    document.getElementById('callAva').innerHTML = u?.avatar ? `<img src="${u.avatar}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">` : '📞';
-    try {
-        localStream = await _tryGetMedia(false);
-        buildPeer(false);
-        const offer = await peerConn.createOffer(); await peerConn.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'call_offer', to: callUser, offer }));
-    } catch(e) {
-        endCall(false);
-        if (e.name === 'NotAllowedError' || e.message === 'no_media') openModal('callPermModal');
-        else showToast('⚠️ Нет доступа к микрофону');
-    }
-};
-
-window.startVideoCall = async function() {
-    if (!activeChat || activeChat === 'Избранное') return showToast('Выберите собеседника');
-    if (!navigator.mediaDevices?.getUserMedia) return showToast('Ваш браузер не поддерживает видеозвонки');
-    callUser = activeChat; isVideo = true;
-    document.getElementById('videoCallOverlay').style.display = 'flex';
-    try {
-        localStream = await _tryGetMedia(true);
-        buildPeer(true);
-        document.getElementById('localVideo').srcObject = localStream;
-        const offer = await peerConn.createOffer(); await peerConn.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'video_offer', to: callUser, offer }));
-    } catch(e) {
-        endVideoCall(false);
-        if (e.name === 'NotAllowedError' || e.message === 'no_media') openModal('callPermModal');
-        else showToast('⚠️ Нет доступа к камере');
-    }
-};
 
 // ── WALLPAPER / CUSTOMIZATION ──
 const wpPresets = [
