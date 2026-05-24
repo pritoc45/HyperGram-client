@@ -42,6 +42,8 @@ input,button{outline:none}
 .auth-btn{width:100%;padding:14px;background:var(--accent);border:none;border-radius:10px;cursor:pointer;font-weight:700;font-size:16px;color:#fff;transition:.2s}
 .auth-btn:hover{opacity:.88}
 .auth-btn:disabled{background:#555;cursor:not-allowed}
+.auth-tab{flex:1;padding:8px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;background:transparent;color:var(--sub);transition:.2s}
+.auth-tab.active{background:var(--accent);color:#fff}
 
 /* ── CALL OVERLAY ── */
 #callOverlay{display:none;position:fixed;inset:0;background:rgba(10,15,25,0.97);z-index:9500;flex-direction:column;justify-content:center;align-items:center}
@@ -452,12 +454,35 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 
 <!-- AUTH -->
 <div id="authOverlay">
-    <div class="auth-box glass">
+    <div class="auth-box glass" id="authBox">
+        <!-- ЛОГОТИП -->
         <div class="auth-logo">✈️</div>
         <h2>AyuGram Pro</h2>
-        <p>Введите имя пользователя для входа</p>
-        <input class="auth-input" id="usernameInput" placeholder="Имя пользователя" autocomplete="off">
-        <button class="auth-btn" id="loginBtn" disabled>Подключение...</button>
+
+        <!-- ТАБЫ -->
+        <div style="display:flex;background:rgba(255,255,255,.07);border-radius:10px;padding:3px;margin-bottom:22px">
+            <button class="auth-tab active" id="tabLogin" onclick="switchAuthTab('login')">Вход</button>
+            <button class="auth-tab" id="tabRegister" onclick="switchAuthTab('register')">Регистрация</button>
+        </div>
+
+        <!-- ФОРМА ВХОДА -->
+        <div id="formLogin">
+            <input class="auth-input" id="loginUsername" placeholder="Имя пользователя" autocomplete="username">
+            <input class="auth-input" id="loginPassword" placeholder="Пароль" type="password" autocomplete="current-password">
+            <button class="auth-btn" id="loginBtn" onclick="doLogin()">Войти</button>
+        </div>
+
+        <!-- ФОРМА РЕГИСТРАЦИИ -->
+        <div id="formRegister" style="display:none">
+            <input class="auth-input" id="regUsername" placeholder="Имя пользователя (латиница, 3+ символа)" autocomplete="username">
+            <input class="auth-input" id="regDisplayName" placeholder="Ваше имя (как будет отображаться)">
+            <input class="auth-input" id="regPassword" placeholder="Пароль (минимум 4 символа)" type="password" autocomplete="new-password">
+            <input class="auth-input" id="regPassword2" placeholder="Повторите пароль" type="password" autocomplete="new-password">
+            <button class="auth-btn" id="regBtn" onclick="doRegister()">Создать аккаунт</button>
+        </div>
+
+        <div id="authError" style="color:#e05252;font-size:13px;margin-top:12px;min-height:18px;text-align:center"></div>
+        <div id="authLoading" style="display:none;color:var(--sub);font-size:13px;margin-top:12px;text-align:center">⏳ Подключение...</div>
     </div>
 </div>
 
@@ -583,7 +608,12 @@ body[data-compact=true] .ava{width:42px;height:42px;font-size:16px}
 
         <div class="sett-sec"></div>
         <div class="sett-card" style="margin-bottom:16px">
-            <div class="sett-row" onclick="switchAccount()">
+            <div class="sett-row" onclick="openChangePassword()">
+                <div class="sett-ico" style="background:#f0932b"><svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg></div>
+                <div class="sett-body"><div class="sett-lbl">Сменить пароль</div></div>
+            </div>
+            <div class="sett-divider"></div>
+            <div class="sett-row settings-danger" onclick="switchAccount()">
                 <div class="sett-ico" style="background:#e05252"><svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg></div>
                 <div class="sett-body"><div class="sett-lbl" style="color:#e05252">Выйти из аккаунта</div></div>
             </div>
@@ -857,12 +887,30 @@ let typingTimeout = null;
 let isTyping = false;
 
 // ── WEBSOCKET ──
+let wsReady = false;
 const ws = new WebSocket(WS_URL);
 
 ws.onopen = () => {
-    const btn = document.getElementById('loginBtn');
-    btn.disabled = false; btn.style.background = 'var(--accent)'; btn.textContent = 'Войти';
-    if (myName) ws.send(JSON.stringify({ type: 'login', username: myName }));
+    wsReady = true;
+    document.getElementById('authLoading').style.display = 'none';
+    // Автологин по сохранённому токену
+    const token = localStorage.getItem('ag_token');
+    const savedUser = localStorage.getItem('ag_user');
+    if (token && savedUser) {
+        ws.send(JSON.stringify({ type: 'login', token }));
+    }
+};
+
+ws.onclose = () => {
+    wsReady = false;
+    document.getElementById('authLoading').style.display = 'block';
+    document.getElementById('authLoading').textContent = '🔴 Нет соединения. Переподключение...';
+    setTimeout(() => location.reload(), 4000);
+};
+
+ws.onerror = () => {
+    document.getElementById('authLoading').style.display = 'block';
+    document.getElementById('authLoading').textContent = '❌ Ошибка соединения с сервером';
 };
 
 ws.onmessage = (e) => {
@@ -870,14 +918,39 @@ ws.onmessage = (e) => {
     if (d.type === 'auth_success') {
         myName = d.username;
         myProfile = d.profile;
+        if (d.token) localStorage.setItem('ag_token', d.token);
         localStorage.setItem('ag_user', myName);
         document.getElementById('authOverlay').style.display = 'none';
         updateSelfUI(d.profile);
         renderChatList();
         requestNotifPerm();
     }
+    if (d.type === 'register_success') {
+        showAuthError('✅ Аккаунт создан! Теперь войдите.', true);
+        switchAuthTab('login');
+        document.getElementById('loginUsername').value = document.getElementById('regUsername').value;
+    }
+    if (d.type === 'kicked') {
+        showToast(d.text);
+        localStorage.removeItem('ag_token');
+        location.reload();
+    }
     if (d.type === 'profile_updated') { myProfile = d.profile; updateSelfUI(d.profile); }
-    if (d.type === 'error') { showToast(d.text); if (d.text.includes('используется')) switchAccount(); }
+    if (d.type === 'password_changed') { showToast('✅ Пароль изменён'); closeModal('settingsModal'); }
+    if (d.type === 'error') {
+        if (d.code === 'auth' || d.code === 'register') {
+            showAuthError(d.text);
+            document.getElementById('authLoading').style.display = 'none';
+        } else if (d.code === 'password') {
+            showToast('❌ ' + d.text);
+        } else {
+            showToast(d.text);
+            if (d.text.includes('используется') || d.text.includes('истекла')) {
+                localStorage.removeItem('ag_token');
+                switchAccount();
+            }
+        }
+    }
     if (d.type === 'user_list') {
         onlineUsers = d.users;
         if (!document.getElementById('searchInput').value) renderChatList();
@@ -917,7 +990,10 @@ ws.onmessage = (e) => {
     if (d.type === 'video_offer') handleIncomingCall(d.from, d.offer, true);
     if (d.type === 'call_answer') handleAnswer(d.answer);
     if (d.type === 'ice_candidate') handleIce(d.candidate);
-    if (d.type === 'call_end') endCall(false);
+    if (d.type === 'call_end') {
+        if (isVideo) endVideoCall(false); else endCall(false);
+        if (d.reason === 'offline') showToast('📵 Пользователь недоступен');
+    }
     if (d.type === 'group_invite') {
         if (!groups[d.groupId]) {
             groups[d.groupId] = d.groupData;
@@ -929,15 +1005,58 @@ ws.onmessage = (e) => {
     }
 };
 
-// ── AUTH ──
-function login() {
-    const u = document.getElementById('usernameInput').value.trim();
-    if (u) ws.send(JSON.stringify({ type: 'login', username: u }));
+// ── AUTH UI ──
+function switchAuthTab(tab) {
+    document.getElementById('formLogin').style.display = tab === 'login' ? '' : 'none';
+    document.getElementById('formRegister').style.display = tab === 'register' ? '' : 'none';
+    document.getElementById('tabLogin').classList.toggle('active', tab === 'login');
+    document.getElementById('tabRegister').classList.toggle('active', tab === 'register');
+    showAuthError('');
 }
-function switchAccount() { localStorage.removeItem('ag_user'); location.reload(); }
 
-document.getElementById('usernameInput').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
-document.getElementById('loginBtn').onclick = login;
+function showAuthError(msg, isSuccess = false) {
+    const el = document.getElementById('authError');
+    el.textContent = msg;
+    el.style.color = isSuccess ? '#3dbc78' : '#e05252';
+}
+
+function doLogin() {
+    const username = document.getElementById('loginUsername').value.trim().toLowerCase();
+    const password = document.getElementById('loginPassword').value;
+    if (!username) return showAuthError('Введите имя пользователя');
+    if (!password) return showAuthError('Введите пароль');
+    if (!wsReady) return showAuthError('Нет соединения с сервером');
+    document.getElementById('authLoading').style.display = 'block';
+    showAuthError('');
+    ws.send(JSON.stringify({ type: 'login', username, password }));
+}
+
+function doRegister() {
+    const username = document.getElementById('regUsername').value.trim().toLowerCase();
+    const displayName = document.getElementById('regDisplayName').value.trim();
+    const password = document.getElementById('regPassword').value;
+    const password2 = document.getElementById('regPassword2').value;
+    if (!username) return showAuthError('Введите имя пользователя');
+    if (username.length < 3) return showAuthError('Минимум 3 символа');
+    if (!password) return showAuthError('Введите пароль');
+    if (password.length < 4) return showAuthError('Пароль минимум 4 символа');
+    if (password !== password2) return showAuthError('Пароли не совпадают');
+    if (!wsReady) return showAuthError('Нет соединения с сервером');
+    document.getElementById('authLoading').style.display = 'block';
+    showAuthError('');
+    ws.send(JSON.stringify({ type: 'register', username, password, displayName }));
+}
+
+function switchAccount() {
+    localStorage.removeItem('ag_token');
+    localStorage.removeItem('ag_user');
+    location.reload();
+}
+
+// Enter в полях авторизации
+document.getElementById('loginPassword').addEventListener('keypress', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('loginUsername').addEventListener('keypress', e => { if (e.key === 'Enter') document.getElementById('loginPassword').focus(); });
+document.getElementById('regPassword2').addEventListener('keypress', e => { if (e.key === 'Enter') doRegister(); });
 
 // ── SAVE ──
 function save() {
@@ -1212,8 +1331,25 @@ function triggerFile() { document.getElementById('fileInput').click(); hideAttac
 
 document.getElementById('mediaInput').onchange = function(e) {
     const f = e.target.files[0]; if (!f || !activeChat) return;
+    if (f.size > 20 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 20 МБ'); return; }
+    const r = new FileReader();
+    r.onload = ev => {
+        const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim(), media: ev.target.result, mediaType: f.type };
+        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
+        ws.send(JSON.stringify(payload));
+        document.getElementById('chatInput').value = '';
+        clearReply();
+    };
+    r.readAsDataURL(f);
+    e.target.value = '';
+};
+
+document.getElementById('fileInput').onchange = function(e) {
+    const f = e.target.files[0]; if (!f || !activeChat) return;
     if (f.size > 50 * 1024 * 1024) { showToast('Файл слишком большой! Макс. 50 МБ'); return; }
-    sendFileNow(f);
+    const r = new FileReader();
+    r.onload = ev => ws.send(JSON.stringify({ type: 'message', to: activeChat, text: `📁 ${f.name}`, media: ev.target.result, mediaType: f.type, fileName: f.name }));
+    r.readAsDataURL(f);
     e.target.value = '';
 };
 
@@ -1310,28 +1446,10 @@ function renderMsgs() {
                 <span class="voice-dur">0:00</span>
             </div>`;
         } else if (m.media) {
-            if (m.mediaType?.startsWith('image/')) {
-                mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')" style="cursor:zoom-in">`;
-            } else if (m.mediaType?.startsWith('video/')) {
-                mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media" style="max-width:100%;border-radius:10px;margin-bottom:6px"></video>`;
-            } else if (m.mediaType?.startsWith('audio/')) {
-                mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px;border-radius:8px"></audio>`;
-            } else {
-                // Любой другой файл — кнопка скачать
-                const fname = m.fileName || 'Файл';
-                const fsize = m.fileSize ? ` · ${m.fileSize}` : '';
-                const ext = fname.split('.').pop().toUpperCase();
-                const extColors = { PDF:'#e05252', ZIP:'#f0932b', RAR:'#f0932b', DOC:'#2f8ccf', DOCX:'#2f8ccf', XLS:'#3dbc78', XLSX:'#3dbc78', PPT:'#e67e22', PPTX:'#e67e22', MP3:'#9c59d1', WAV:'#9c59d1', TXT:'#708599' };
-                const extColor = extColors[ext] || '#708599';
-                mediaHtml = `<div onclick="downloadFile('${m.media}','${fname.replace(/'/g,"\\'")}',this)" style="display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.15);padding:10px 12px;border-radius:10px;margin-bottom:4px;cursor:pointer;min-width:200px;transition:.15s" onmouseover="this.style.background='rgba(0,0,0,.25)'" onmouseout="this.style.background='rgba(0,0,0,.15)'">
-                    <div style="width:42px;height:42px;border-radius:10px;background:${extColor};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0">${ext||'?'}</div>
-                    <div style="flex:1;min-width:0">
-                        <div style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fname}</div>
-                        <div style="font-size:11px;color:var(--sub)">Нажмите чтобы скачать${fsize}</div>
-                    </div>
-                    <div style="font-size:18px;opacity:.6">⬇️</div>
-                </div>`;
-            }
+            if (m.mediaType?.startsWith('image/')) mediaHtml = `<img src="${m.media}" class="msg-media" onclick="openViewer('img','${m.media}')">`;
+            else if (m.mediaType?.startsWith('video/')) mediaHtml = `<video src="${m.media}" controls class="msg-video msg-media"></video>`;
+            else if (m.mediaType?.startsWith('audio/')) mediaHtml = `<audio src="${m.media}" controls style="width:100%;margin-bottom:4px"></audio>`;
+            else mediaHtml = `<div style="background:rgba(0,0,0,.15);padding:8px;border-radius:8px;margin-bottom:4px;font-size:13px">📁 ${m.fileName || 'Файл'}</div>`;
         }
 
         let replyHtml = '';
@@ -1482,21 +1600,6 @@ function openViewer(type, src) {
     v.classList.add('show');
 }
 function closeViewer() { document.getElementById('mediaViewer').classList.remove('show'); document.getElementById('viewerContent').innerHTML = ''; }
-
-function downloadFile(dataUrl, fileName, el) {
-    try {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        showToast(`⬇️ Скачиваем ${fileName}`);
-    } catch(e) {
-        showToast('❌ Не удалось скачать файл');
-    }
-}
 
 // ── УВЕДОМЛЕНИЯ (улучшенные) ──
 function requestNotifPerm() {
@@ -2117,106 +2220,73 @@ window.sendMsg = function() {
     _origSendMsg();
 };
 
-// ── ALL FILE TYPES (единый обработчик) ──
-
-// Универсальная функция отправки файла
-function sendFileNow(f) {
-    if (!activeChat) return showToast('Выберите чат');
-    if (f.size > 100 * 1024 * 1024) return showToast(`❌ Слишком большой: ${f.name} (макс. 100 МБ)`);
-
-    const reader = new FileReader();
-    showToast(`📤 Загружаем ${f.name}...`);
-
-    reader.onload = ev => {
-        const payload = {
-            type: 'message',
-            to: activeChat,
-            text: '',
-            media: ev.target.result,
-            mediaType: f.type || 'application/octet-stream',
-            fileName: f.name
-        };
-        if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text || '📎'; }
-        ws.send(JSON.stringify(payload));
-        clearReply();
-        cancelFilePrev();
-    };
-
-    reader.onerror = () => showToast(`❌ Ошибка чтения файла`);
-    reader.readAsDataURL(f);
-}
-
-// fileInput — любые файлы, можно несколько
-document.getElementById('fileInput').onchange = function(e) {
-    const files = Array.from(e.target.files);
-    if (!files.length || !activeChat) return;
-    if (files.length === 1) {
-        showFilePreview(files[0]);
-    } else {
-        // Несколько файлов — отправляем все сразу
-        files.forEach(f => sendFileNow(f));
-    }
-    e.target.value = '';
-};
-
-// Аудио input
+// ── ALL FILE TYPES ──
+let pendingFileData = null;
 const audioInput = document.createElement('input');
-audioInput.type = 'file';
-audioInput.accept = 'audio/*';
-audioInput.style.display = 'none';
+audioInput.type = 'file'; audioInput.accept = 'audio/*'; audioInput.style.display = 'none';
 document.body.appendChild(audioInput);
 function triggerAudio() { audioInput.click(); hideAttachMenu(); }
 audioInput.onchange = function(e) {
-    const f = e.target.files[0]; if (!f) return;
-    showFilePreview(f);
+    const f = e.target.files[0]; if (!f || !activeChat) return;
+    readAndSendFile(f);
     e.target.value = '';
 };
 
-// Превью файла перед отправкой
-let pendingFileData = null;
+// Override fileInput to handle multiple files
+document.getElementById('fileInput').onchange = function(e) {
+    const files = Array.from(e.target.files); if (!files.length || !activeChat) return;
+    files.forEach(f => readAndSendFile(f));
+    e.target.value = '';
+};
+
+function readAndSendFile(f) {
+    if (f.size > 100 * 1024 * 1024) { showToast(`❌ Файл слишком большой: ${f.name}`); return; }
+    showFilePreview(f);
+    pendingFileData = f;
+}
 
 function showFilePreview(f) {
-    pendingFileData = f;
     const bar = document.getElementById('filePreviewBar');
-    // Иконка по типу
-    const typeMap = [
-        ['image/', '🖼️'], ['video/', '🎬'], ['audio/', '🎵'],
-        ['application/pdf', '📄'], ['application/zip', '🗜️'],
-        ['application/x-zip', '🗜️'], ['application/x-rar', '🗜️'],
-        ['text/', '📝'], ['application/msword', '📝'],
-        ['application/vnd.openxmlformats', '📊'],
-        ['application/vnd.ms-excel', '📊'],
-        ['application/vnd.ms-powerpoint', '📊'],
-    ];
+    const icons = { 'image/': '🖼️', 'video/': '🎬', 'audio/': '🎵', 'application/pdf': '📄', 'application/zip': '🗜️', 'application/x-zip': '🗜️', 'text/': '📝', 'application/msword': '📝', 'application/vnd': '📊' };
     let ico = '📁';
-    for (const [k, v] of typeMap) {
-        if (f.type.startsWith(k) || f.type === k) { ico = v; break; }
-    }
+    for (const [k,v] of Object.entries(icons)) { if (f.type.startsWith(k)||f.type===k) { ico = v; break; } }
     document.getElementById('filePrevIco').textContent = ico;
     document.getElementById('filePrevName').textContent = f.name;
     document.getElementById('filePrevSize').textContent = formatBytes(f.size);
     bar.classList.add('show');
-    // Вставить перед footer если ещё не там
+    // Insert bar before footer
     const footer = document.querySelector('.chat-footer');
-    if (bar.parentNode !== footer.parentNode) footer.parentNode.insertBefore(bar, footer);
+    footer.parentNode.insertBefore(bar, footer);
+    // Auto-send after click send
+    const origSend = window._fileAutoSend;
+    window._fileAutoSend = f;
 }
 
 function cancelFilePrev() {
     document.getElementById('filePreviewBar').classList.remove('show');
-    pendingFileData = null;
+    pendingFileData = null; window._fileAutoSend = null;
 }
 
 function formatBytes(b) {
     if (b < 1024) return b + ' Б';
-    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' КБ';
-    return (b / (1024 * 1024)).toFixed(1) + ' МБ';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' КБ';
+    return (b/(1024*1024)).toFixed(1) + ' МБ';
 }
 
-// Перехват sendMsg: если есть pendingFile — отправить его
+// Intercept send to check for pending file
 const __sendMsg = window.sendMsg;
 window.sendMsg = function() {
-    if (pendingFileData) {
-        sendFileNow(pendingFileData);
+    if (pendingFileData && activeChat) {
+        const f = pendingFileData; pendingFileData = null;
+        cancelFilePrev();
+        const r = new FileReader();
+        r.onload = ev => {
+            const payload = { type: 'message', to: activeChat, text: document.getElementById('chatInput').value.trim()||'', media: ev.target.result, mediaType: f.type, fileName: f.name };
+            if (replyingTo) { payload.replyTo = replyingTo.id; payload.replyText = replyingTo.text||'📎'; }
+            ws.send(JSON.stringify(payload));
+            document.getElementById('chatInput').value = ''; clearReply();
+        };
+        r.readAsDataURL(f);
         return;
     }
     __sendMsg();
@@ -2365,7 +2435,52 @@ function toggleCompact() {
     localStorage.setItem('ag_compact', !isCompact);
 }
 
-// ── RESTORE SAVED SETTINGS ──
+// ── СМЕНА ПАРОЛЯ ──
+function openChangePassword() {
+    document.getElementById('cpOld').value = '';
+    document.getElementById('cpNew').value = '';
+    document.getElementById('cpNew2').value = '';
+    closeModal('settingsModal');
+    openModal('changePassModal');
+}
+function submitChangePassword() {
+    const oldP = document.getElementById('cpOld').value;
+    const newP = document.getElementById('cpNew').value;
+    const newP2 = document.getElementById('cpNew2').value;
+    if (!oldP) return showToast('Введите старый пароль');
+    if (!newP || newP.length < 4) return showToast('Новый пароль минимум 4 символа');
+    if (newP !== newP2) return showToast('Пароли не совпадают');
+    ws.send(JSON.stringify({ type: 'change_password', oldPassword: oldP, newPassword: newP }));
+    closeModal('changePassModal');
+}
+
+// ── УЛУЧШЕННЫЙ ЗАПРОС РАЗРЕШЕНИЙ НА ЗВОНКИ ──
+// Запрашиваем разрешение заранее при первом входе
+async function preRequestMediaPermissions() {
+    try {
+        // Пробуем тихо получить разрешение
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+        console.log('✅ Разрешение на микрофон получено');
+    } catch(e) {
+        // Не показываем ошибку — пользователь не нажимал звонок
+        console.log('ℹ️ Разрешение на микрофон не дано:', e.name);
+    }
+}
+
+// Вызываем при входе в аккаунт (после auth_success уже обработан выше)
+const _origUpdateSelfUI = updateSelfUI;
+window.updateSelfUI = function(p) {
+    _origUpdateSelfUI(p);
+    // Запрашиваем разрешения при первом входе
+    if (!localStorage.getItem('ag_media_asked')) {
+        setTimeout(() => {
+            preRequestMediaPermissions();
+            localStorage.setItem('ag_media_asked', '1');
+        }, 2000);
+    }
+};
+
 (function restoreSettings() {
     const wp = localStorage.getItem('ag_wallpaper');
     const wpSolid = localStorage.getItem('ag_wallpaper_solid');
@@ -2595,6 +2710,22 @@ function toggleCompact() {
             </div>
             <div style="font-size:13px;color:var(--sub)">После разрешения обновите страницу и попробуйте снова.</div>
             <button onclick="location.reload()" style="padding:12px;background:var(--accent);border:none;border-radius:10px;color:#fff;font-weight:700;cursor:pointer;font-size:15px">🔄 Обновить страницу</button>
+        </div>
+    </div>
+</div>
+
+<!-- CHANGE PASSWORD MODAL -->
+<div class="modal-overlay" id="changePassModal" onclick="if(event.target===this)closeModal('changePassModal')">
+    <div class="modal" style="max-width:360px">
+        <div class="modal-hd">
+            <button class="modal-close" onclick="closeModal('changePassModal')">←</button>
+            <div class="modal-hd-title">🔒 Смена пароля</div>
+        </div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:12px">
+            <input class="auth-input" id="cpOld" placeholder="Старый пароль" type="password" style="margin-bottom:0">
+            <input class="auth-input" id="cpNew" placeholder="Новый пароль (мин. 4 символа)" type="password" style="margin-bottom:0">
+            <input class="auth-input" id="cpNew2" placeholder="Повторите новый пароль" type="password" style="margin-bottom:0">
+            <button class="sett-save" onclick="submitChangePassword()">Сменить пароль</button>
         </div>
     </div>
 </div>
