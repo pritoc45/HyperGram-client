@@ -1828,6 +1828,8 @@ async function handleIncomingCall(from, offer, video) {
         return;
     }
     callUser = from; isVideo = video;
+    window._peerReady = false;
+    window._acceptPressed = false;
     showCallUI(video, true, from);
 
     // Звуковой сигнал входящего звонка
@@ -1846,8 +1848,10 @@ async function handleIncomingCall(from, offer, video) {
 
     // Уведомление о входящем звонке
     if (Notification.permission === 'granted') {
-        const n = new Notification(`📞 Входящий звонок от ${from}`, { body: 'Нажмите чтобы ответить', icon: '/favicon.ico', requireInteraction: true, tag: 'incoming-call' });
-        n.onclick = () => { window.focus(); n.close(); };
+        try {
+            const n = new Notification(`📞 Входящий звонок от ${from}`, { body: 'Нажмите чтобы ответить', icon: '/favicon.ico', requireInteraction: true, tag: 'incoming-call' });
+            n.onclick = () => { window.focus(); n.close(); };
+        } catch(e) {}
     }
 
     try {
@@ -1856,30 +1860,51 @@ async function handleIncomingCall(from, offer, video) {
         if (video) document.getElementById('localVideo').srcObject = localStream;
         await peerConn.setRemoteDescription(new RTCSessionDescription(offer));
         await flushCandidates();
+        window._peerReady = true;
+        // Если пользователь нажал "Принять" пока peer ещё не был готов — выполняем сразу
+        if (window._acceptPressed) {
+            window._acceptPressed = false;
+            await _doAccept();
+            return;
+        }
         // Видеозвонок принимается автоматически
         if (video) {
-            const answer = await peerConn.createAnswer();
-            await peerConn.setLocalDescription(answer);
-            ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer: peerConn.localDescription }));
-            startCallTimer();
+            await _doAccept();
         }
     } catch(e) {
         console.error('handleIncomingCall error:', e);
-        showToast('❌ Ошибка входящего звонка: ' + e.message);
-        if (e.name === 'NotAllowedError') openModal('callPermModal');
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+            openModal('callPermModal');
+        } else {
+            showToast('❌ Ошибка входящего звонка: ' + e.message);
+        }
+        endCall(false);
+    }
+}
+
+async function _doAccept() {
+    try {
+        document.getElementById('acceptCallBtn').style.display = 'none';
+        document.getElementById('callStatus').textContent = `🔊 Разговор с ${callUser}`;
+        const answer = await peerConn.createAnswer();
+        await peerConn.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer: peerConn.localDescription }));
+        startCallTimer();
+    } catch(e) {
+        showToast('Ошибка при ответе: ' + e.message);
+        console.error('_doAccept error:', e);
     }
 }
 
 async function acceptCall() {
-    document.getElementById('acceptCallBtn').style.display = 'none';
-    document.getElementById('callStatus').textContent = `🔊 Разговор с ${callUser}`;
-    try {
-        const answer = await peerConn.createAnswer();
-        await peerConn.setLocalDescription(answer);
-        await flushCandidates();
-        ws.send(JSON.stringify({ type: 'call_answer', to: callUser, answer: peerConn.localDescription }));
-        startCallTimer();
-    } catch(e) { showToast('Ошибка при ответе: ' + e.message); }
+    if (!window._peerReady || !peerConn) {
+        // Peer ещё грузится — запомним нажатие, выполним автоматически как только будет готов
+        window._acceptPressed = true;
+        document.getElementById('acceptCallBtn').style.display = 'none';
+        document.getElementById('callStatus').textContent = '⏳ Подключаемся...';
+        return;
+    }
+    await _doAccept();
 }
 
 async function handleAnswer(answer) {
