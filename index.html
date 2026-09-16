@@ -626,6 +626,7 @@ ws.onmessage = (e) => {
       localStorage.setItem('ag_user', myName);
       document.getElementById('authOverlay').style.display = 'none';
       updateSelfUI(d.profile); renderChatList(); requestNotifPerm();
+      ws.send(JSON.stringify({ type: 'get_history' }));
     }
     if (d.type === 'register_success') {
       showAuthError('✅ Аккаунт создан! Теперь войдите.', true);
@@ -643,6 +644,7 @@ ws.onmessage = (e) => {
     if (d.type === 'user_list') { onlineUsers = d.users; if (!document.getElementById('searchInput').value) renderChatList(); if (activeChat) updateChatHeader(); }
     if (d.type === 'new_message') {
       const branch = d.groupId || (d.from === myName ? d.to : d.from);
+      if ((msgs[branch] || []).some(x => x.id === d.id)) return;
       if (!msgs[branch]) msgs[branch] = [];
       msgs[branch].push(d);
       if (!chats.includes(branch) && branch !== 'Избранное') chats.unshift(branch);
@@ -651,14 +653,17 @@ ws.onmessage = (e) => {
       if (activeChat === branch) { renderMsgs(); markRead(branch); }
       renderChatList();
     }
-    if (d.type === 'history') {
-      const branch = d.with;
-      if (!msgs[branch]) msgs[branch] = [];
-      const have = new Set(msgs[branch].map(m => m.id).filter(Boolean));
-      let added = 0;
-      (d.messages || []).forEach(m => { if (m && m.id && !have.has(m.id)) { msgs[branch].push(m); added++; } });
-      if (added) { msgs[branch].sort((a, b) => (a.id || '').localeCompare(b.id || '')); save(); if (activeChat === branch) renderMsgs(); renderChatList(); }
-    }
+ if (d.type === 'history') {
+  (d.messages || []).forEach(m => {
+    const branch = m.groupId || (m.from === myName ? m.to : m.from);
+    if (!msgs[branch]) msgs[branch] = [];
+    if (!msgs[branch].some(x => x.id === m.id)) msgs[branch].push(m);
+    if (!chats.includes(branch) && branch !== 'Избранное') chats.unshift(branch);
+  });
+  Object.keys(msgs).forEach(k => msgs[k].sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+  save(); renderChatList();
+  if (activeChat) renderMsgs();
+}
     if (d.type === 'msg_edited') {
       const branch = d.groupId || (d.from === myName ? d.to : d.from);
       const m = (msgs[branch] || []).find(x => x.id === d.messageId);
@@ -751,7 +756,38 @@ document.getElementById('fileInput').onchange = function(e){ const f=Array.from(
 function showFilePreview(f){ pendingFileData=f; const typeMap=[['image/','🖼️'],['video/','🎬'],['audio/','🎵'],['application/pdf','📄'],['zip','🗜️'],['rar','🗜️'],['7z','🗜️'],['text/','📝'],['msword','📝'],['openxml','📊']]; let ico='📄'; for(const [k,v] of typeMap){ if((f.type||f.name).includes(k)){ ico=v; break; } } document.getElementById('filePrevIco').textContent=ico; document.getElementById('filePrevName').textContent=f.name; document.getElementById('filePrevSize').textContent=formatBytes(f.size); document.getElementById('filePreviewBar').classList.add('show'); }
 function cancelFilePrev(){ document.getElementById('filePreviewBar').classList.remove('show'); pendingFileData=null; }
 function formatBytes(b){ if(b<1024) return b+' Б'; if(b<1048576) return (b/1024).toFixed(1)+' КБ'; return (b/1048576).toFixed(1)+' МБ'; }
-function sendFileNow(f){ if(!activeChat) return showToast('Выберите чат'); if(f.size>100*1024*1024) return showToast(`❌ Слишком большой: ${f.name}`); showToast(`📤 Отправляем ${f.name}...`); const r=new FileReader(); r.onload=ev=>{ const payload={ type:'message', to:activeChat, text:'', media:ev.target.result, mediaType:f.type||'application/octet-stream', fileName:f.name }; if(replyingTo){ payload.replyTo=replyingTo.id; payload.replyText=replyingTo.text||'📎'; } const grp=groups[activeChat]; if(grp){ if(!msgs[activeChat]) msgs[activeChat]=[]; msgs[activeChat].push(Object.assign({}, payload, { type:'new_message', id:Date.now().toString(36), from:myName, time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), reactions:{} })); save(); renderMsgs(); renderChatList(); (grp.members||[]).filter(m=>m!==myName).forEach(m=>ws.send(JSON.stringify(Object.assign({}, payload, { to:m, groupId:activeChat })))); } else ws.send(JSON.stringify(payload)); clearReply(); cancelFilePrev(); }; r.onerror=()=>showToast('❌ Ошибка чтения файла'); r.readAsDataURL(f); }
+function sendFileNow(f) {
+  if (!activeChat) return showToast('Выберите чат');
+  if (f.size > 60 * 1024 * 1024) return showToast(`❌ Слишком большой: ${f.name} (макс. 60 МБ)`);
+  const grp = groups[activeChat];
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const dataUrl = ev.target.result;
+    const base = { to: activeChat, text: '', mediaType: f.type || 'application/octet-stream', fileName: f.name };
+    if (grp) { base.groupId = activeChat; base.groupName = grp.name; }
+    if (replyingTo) { base.replyTo = replyingTo.id; base.replyText = replyingTo.text || '📎'; }
+    if (dataUrl.length < 900 * 1024) {           // мелкий файл — сразу
+      ws.send(JSON.stringify(Object.assign({ type: 'message', media: dataUrl }, base)));
+      clearReply(); cancelFilePrev(); return;
+    }
+    const uploadId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const CHUNK = 300 * 1024;
+    const chunks = []; for (let i = 0; i < dataUrl.length; i += CHUNK) chunks.push(dataUrl.slice(i, i + CHUNK));
+    ws.send(JSON.stringify(Object.assign({ type: 'media_start', uploadId, total: chunks.length }, base)));
+    let i = 0;
+    const sendNext = () => {
+      const batch = chunks.slice(i, i + 6);
+      batch.forEach(c => ws.send(JSON.stringify({ type: 'media_chunk', uploadId, data: c })));
+      i += batch.length;
+      showToast(`📤 ${f.name}: ${Math.round(i / chunks.length * 100)}%`);
+      if (i < chunks.length) setTimeout(sendNext, 40);
+      else { ws.send(JSON.stringify({ type: 'media_end', uploadId })); clearReply(); cancelFilePrev(); showToast('✅ Файл отправлен'); }
+    };
+    sendNext();
+  };
+  reader.onerror = () => showToast('❌ Ошибка чтения файла');
+  reader.readAsDataURL(f);
+}
 const _sendMsgOrig = sendMsg;
 window.sendMsg = function(){ if(pendingFileData){ sendFileNow(pendingFileData); return; } _sendMsgOrig(); };
 
