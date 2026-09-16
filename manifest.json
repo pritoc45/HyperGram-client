@@ -2,8 +2,8 @@
   "name": "AyuGram Pro",
   "short_name": "AyuGram",
   "description": "Мессенджер AyuGram Pro",
-  "start_url": "/ayugram-client/",
-  "scope": "/ayugram-client/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#0e1621",
@@ -28,7 +28,7 @@
       "name": "Избранное",
       "short_name": "Сохранено",
       "description": "Открыть сохранённые сообщения",
-      "url": "/ayugram-client/?chat=saved",
+      "url": "./?chat=saved",
       "icons": [{ "src": "https://img.icons8.com/color/96/bookmark.png", "sizes": "96x96" }]
     }
   ],
