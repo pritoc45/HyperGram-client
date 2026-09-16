@@ -660,8 +660,10 @@ let mediaRecorder = null, voiceChunks = [], voiceRecording = false;
 let typingTimeout = null, isTyping = false;
 const DEFAULT_BG = "radial-gradient(1200px 800px at 85% -10%,rgba(56,189,248,.22),transparent 60%),radial-gradient(1000px 700px at -10% 110%,rgba(124,58,237,.20),transparent 60%),linear-gradient(160deg,#0b1220 0%,#0e1621 50%,#101a2e 100%)";
 // ── Адрес сервера: авто + ручное переопределение ──
-const HG_SERVERS = { render: 'wss://brave-imagination.onrender.com', home: 'ws://192.168.1.1:8080' };
-function hgWsUrl() {
+const HG_SERVERS = {
+  render: 'wss://ayugram-server.onrender.com',
+  home:   'ws://192.168.1.1:8080'
+};function hgWsUrl() {
   const saved = localStorage.getItem('hg_ws');
   if (saved) return saved;
   return location.hostname.endsWith('github.io') ? HG_SERVERS.render : HG_SERVERS.home;
